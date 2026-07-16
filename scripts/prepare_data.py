@@ -1,7 +1,5 @@
-"""Load raw CSVs → structural clean → write interim parquet tables.
+"""Load raw CSVs → structural clean → interim parquet + walk-forward fold manifests.
 
-Fold manifests are Task 5 (``build_expanding_folds`` / ``save_fold_manifests``).
-This entrypoint intentionally omits fold generation so Task 4 stays self-contained.
 Does not fit scalers or apply global winsorization.
 """
 
@@ -14,6 +12,7 @@ from store_sales.config import ProjectPaths, load_default_config
 from store_sales.data.clean import clean_structural
 from store_sales.data.load import load_raw_tables
 from store_sales.data.outliers import describe_sales_tails, flag_invalid_sales
+from store_sales.data.split import build_expanding_folds, save_fold_manifests
 from store_sales.io.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,17 +30,18 @@ INTERIM_TABLES = (
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare interim cleaned tables (no fold manifests; Task 5)"
+        description="Prepare interim cleaned tables and expanding walk-forward folds"
     )
     parser.add_argument("--raw-dir", type=Path, default=None)
     parser.add_argument("--interim-dir", type=Path, default=None)
+    parser.add_argument("--splits-dir", type=Path, default=None)
     args = parser.parse_args()
 
-    # Config loaded for future fold args (Task 5); unused for interim write path.
-    _cfg = load_default_config()
+    cfg = load_default_config()
     paths = ProjectPaths()
     raw_dir = args.raw_dir or paths.data_raw
     interim = args.interim_dir or paths.data_interim
+    splits_dir = args.splits_dir or paths.data_splits
 
     logger.info("Loading raw tables from %s", raw_dir)
     tables = load_raw_tables(raw_dir)
@@ -63,13 +63,25 @@ def main() -> None:
         cleaned[name].to_parquet(out_path, index=False)
         logger.info("Wrote %s rows=%d path=%s", name, len(cleaned[name]), out_path)
 
-    # Task 5: walk-forward folds + manifests (build_expanding_folds / save_fold_manifests).
-    # Omit until split module lands so Task 4 is self-contained.
-    logger.info(
-        "Skipping fold manifests (Task 5). Wrote interim tables only to %s",
-        interim,
+    cv = cfg.get("cv", {})
+    date_col = cfg.get("date_col", "date")
+    folds = build_expanding_folds(
+        cleaned["train"],
+        date_col=date_col,
+        n_folds=int(cv.get("n_folds", 3)),
+        val_days=int(cv.get("val_days", 15)),
+        gap_days=int(cv.get("gap_days", 0)),
+        min_train_days=int(cv.get("min_train_days", 365)),
     )
-    print(f"Wrote interim tables to {interim} (fold generation deferred to Task 5)")
+    save_fold_manifests(folds, splits_dir)
+    logger.info(
+        "Wrote %d fold manifests to %s (folds_meta.json)",
+        len(folds),
+        splits_dir,
+    )
+    print(
+        f"Wrote interim tables to {interim} and {len(folds)} folds to {splits_dir}"
+    )
 
 
 if __name__ == "__main__":
