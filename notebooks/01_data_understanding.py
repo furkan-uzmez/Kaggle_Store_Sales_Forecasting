@@ -326,15 +326,15 @@ print("sample_submission rows:", len(tables["sample_submission"]), "test rows:",
 # Purpose: target distribution / zero mass, aggregate series, sample panels, DOW seasonality, oil missingness.
 
 # %%
-# Target distribution (log1p of positive sales) — sample for KDE speed/RAM; report sample size
+# Target distribution (log1p of positive sales) — sample for hist speed/RAM; report sample size
 _sales_sample_n = min(300_000, len(train))
 sales_sample = train["sales"].sample(n=_sales_sample_n, random_state=SEED)
-print(f"Target hist/KDE sample size: {_sales_sample_n:,} of {len(train):,} rows")
+print(f"Target hist sample size: {_sales_sample_n:,} of {len(train):,} rows")
 fig, ax = plt.subplots(figsize=(8, 4))
 plot_target_distribution(
     sales_sample,
     ax=ax,
-    title=f"Train sales distribution (sample n={_sales_sample_n:,})",
+    title=f"Train sales log1p dist (positive; sample n={_sales_sample_n:,})",
     save_path=EDA_DIR / "01_target_distribution_log1p.png",
 )
 plt.show()
@@ -406,6 +406,11 @@ fig = plot_store_family_panels(
 plt.show()
 plt.close(fig)
 
+# %% [markdown]
+# ### Day-of-week seasonality
+#
+# Purpose: national daily sales by weekday — supports seasonal-naive period 7 (and secondary 14).
+
 # %%
 # Day-of-week seasonality (sample rows for speed if needed — full data is fine for groupby)
 # Use daily total by DOW for boxplot of store-level daily totals sample
@@ -429,6 +434,11 @@ plt.close(fig)
 # Mean sales by DOW table
 dow_mean = nat.groupby("dow")["sales"].mean()
 print("Mean national sales by DOW (0=Mon):\n", dow_mean.to_string())
+
+# %% [markdown]
+# ### Oil missingness
+#
+# Purpose: visualize raw oil price gaps (weekends/holidays) vs interim causal-ffill series.
 
 # %%
 # Oil missingness: plot RAW if available else interim

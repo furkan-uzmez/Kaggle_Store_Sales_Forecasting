@@ -98,3 +98,21 @@ docs: EDA notebook with visual diagnostics and decision log
 - Task 7 complete: thin executed EDA notebook, viz helpers, decision log, exploratory naive floors for Task 6.
 - pytest green; notebook executes top-to-bottom; figures under `outputs/reports/eda/`.
 - Official baseline runner/artifacts deferred to Task 6.
+
+## Review fix — markdown-before-code (visual pack)
+
+**Finding:** After target/zero O/I/A, three code cells ran back-to-back (aggregate+panels → DOW → oil) without markdown before DOW and oil cells — broke `better-jupyter-notebook` Markdown-before-code contract.
+
+**Fix (content-equivalent; decision-log numbers unchanged):**
+- Inserted short purpose markdown before DOW seasonality code cell.
+- Inserted short purpose markdown before oil missingness code cell.
+- Optional minor: hist title/comment aligned with log1p-positive hist (no KDE claim).
+
+**Verification:**
+
+```text
+uv run jupytext --sync notebooks/01_data_understanding.py  → OK
+uv run python (nbformat walk): code cells without preceding markdown: [] → OK structure
+```
+
+**Commit message:** `docs: add markdown before EDA visual-pack code cells`
