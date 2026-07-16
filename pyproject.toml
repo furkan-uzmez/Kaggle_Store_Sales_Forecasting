@@ -33,3 +33,9 @@ packages = ["src/store_sales"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "jupytext>=1.19.4",
+    "nbconvert>=7.17.1",
+]

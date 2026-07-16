@@ -1,0 +1,5 @@
+# Pair notebooks with percent-format scripts for reviewable diffs.
+formats = "ipynb,py:percent"
+notebook_metadata_filter = "kernelspec,jupytext,language_info"
+cell_metadata_filter = "all,-autoscroll,-collapsed,-scrolled,-trusted,-ExecuteTime"
+comment_magics = false
