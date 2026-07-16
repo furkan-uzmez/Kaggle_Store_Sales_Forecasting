@@ -1,0 +1,31 @@
+seed: 42
+target_col: sales
+id_cols: [date, store_nbr, family]
+entity_cols: [store_nbr, family]
+date_col: date
+horizon_days: 15
+metric: rmsle
+paths:
+  raw_dir: data/raw
+  interim_dir: data/interim
+  splits_dir: data/splits
+  outputs_dir: outputs
+cv:
+  strategy: expanding  # or sliding after notebook 01 evidence
+  n_folds: 3
+  val_days: 15
+  gap_days: 0  # set to max feature lookback after 01/02
+  min_train_days: 365
+baselines:
+  include: [last_value, seasonal_naive_7, seasonal_naive_14]
+  seasonal_periods: [7, 14]
+hpo:
+  outer_folds: from_manifests
+  inner_strategy: last_train_block  # or expanding_subfolds on train window only
+  inner_val_days: 15
+  n_trials: 40
+multi_seed:
+  seeds: [42, 43, 44]
+gpu: true  # scripts fall back to CPU if unavailable
+logging:
+  level: INFO
