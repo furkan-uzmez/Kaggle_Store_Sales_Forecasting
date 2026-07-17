@@ -214,6 +214,40 @@ def _load_feature_extras(
     return extras
 
 
+def mask_outcome_extras_after(
+    extras: dict[str, pd.DataFrame],
+    train_end: pd.Timestamp | str,
+    *,
+    date_col: str = "date",
+) -> dict[str, pd.DataFrame]:
+    """Null outcome-like aux values strictly after ``train_end`` (PIT for multi-step).
+
+    Transactions are store-level activity correlated with sales. True post-origin
+    values must not feed multi-horizon lag/rolling merges. Rows are kept (dates
+    stay aligned) so lag-1 on the first horizon day can still read the last train
+    day; mid-horizon lags become NaN instead of true future transactions.
+
+    Oil is lag-1 on a public price series and is left unchanged here.
+    """
+    if not extras:
+        return extras
+    origin = pd.Timestamp(train_end)
+    out = dict(extras)
+    if "transactions" in out and out["transactions"] is not None:
+        tx = out["transactions"].copy()
+        tx[date_col] = pd.to_datetime(tx[date_col])
+        post = tx[date_col] > origin
+        # Null measured values only; keep keys/date/store for lag alignment.
+        skip = {date_col, "store_nbr"}
+        for col in tx.columns:
+            if col in skip:
+                continue
+            if pd.api.types.is_numeric_dtype(tx[col]) or col == "transactions":
+                tx.loc[post, col] = np.nan
+        out["transactions"] = tx
+    return out
+
+
 def _prepare_lgbm_matrices(
     *,
     panel: pd.DataFrame,
@@ -233,7 +267,8 @@ def _prepare_lgbm_matrices(
 
     Critical leakage rule: mask target after ``train_end`` **before** lag/rolling
     so true val sales cannot feed target-derived features. Calendar/promo/known
-    future still use val-row covariates.
+    future still use val-row covariates. Outcome-like extras (transactions) are
+    also origin-masked so mid-horizon true activity cannot leak into FE.
     """
     idx = np.unique(np.concatenate([train_idx, val_idx]))
     fold_panel = panel.loc[idx].copy()
@@ -248,10 +283,11 @@ def _prepare_lgbm_matrices(
         date_col=date_col,
         target_col=target_col,
     )
+    safe_extras = mask_outcome_extras_after(extras, train_end, date_col=date_col)
     featured = build_feature_matrix(
         masked,
         groups=groups,
-        extras=extras,
+        extras=safe_extras,
         entity_cols=entity_cols,
         date_col=date_col,
         target_col=target_col,
@@ -358,6 +394,7 @@ def _recursive_val_predict(
     """Predict val horizon day-by-day, writing preds into sales for next lags.
 
     Uses only train sales plus previously predicted val sales (no true val target).
+    Outcome-like extras (transactions) are origin-masked once before the loop.
     """
     work = panel.copy()
     work[date_col] = pd.to_datetime(work[date_col])
@@ -376,6 +413,7 @@ def _recursive_val_predict(
     meta_val = ordered_val[meta_cols].copy()
     # Drop true post-origin sales so lag/rolling cannot see them.
     work.loc[work[date_col] > train_end, target_col] = np.nan
+    safe_extras = mask_outcome_extras_after(extras, train_end, date_col=date_col)
 
     val_dates = sorted(work.loc[val_mask, date_col].unique())
     pred_parts: list[pd.DataFrame] = []
@@ -389,7 +427,7 @@ def _recursive_val_predict(
         featured = build_feature_matrix(
             sub,
             groups=groups,
-            extras=extras,
+            extras=safe_extras,
             entity_cols=entity_cols,
             date_col=date_col,
             target_col=target_col,
