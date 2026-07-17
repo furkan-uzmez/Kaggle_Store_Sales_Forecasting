@@ -21,7 +21,8 @@
 #
 # **Self-contained Kaggle notebook** (no local `src/` imports). Pipeline:
 #
-# 1. Load competition CSVs from `/kaggle/input/...`
+# 1. Load competition CSVs from
+#    `/kaggle/input/competitions/store-sales-time-series-forecasting`
 # 2. Leakage-safe features: calendar, promo, **past-only** lag / rolling
 # 3. Expanding walk-forward outer folds (3 × 15-day val windows at the train end)
 # 4. **Nested temporal HPO** (Optuna): inner score = last 15 days of each **outer train only**
@@ -63,6 +64,10 @@ warnings.filterwarnings("ignore")
 class CFG:
     # Paths — Kaggle first, local repo fallback
     competition: str = "store-sales-time-series-forecasting"
+    # Official competitions mount (user / current Kaggle layout)
+    kaggle_input_dir: str = (
+        "/kaggle/input/competitions/store-sales-time-series-forecasting"
+    )
     seed: int = 42
     seeds: list[int] = field(default_factory=lambda: [42, 43, 44])
 
@@ -115,12 +120,17 @@ def seed_everything(seed: int) -> None:
 
 seed_everything(CFG.seed)
 
-# Resolve paths
-_kaggle_in = Path(f"/kaggle/input/{CFG.competition}")
+# Resolve paths (prefer competitions/ mount, then legacy input slug, then local)
+_kaggle_candidates = [
+    Path(CFG.kaggle_input_dir),  # /kaggle/input/competitions/store-sales-time-series-forecasting
+    Path(f"/kaggle/input/{CFG.competition}"),  # legacy Add Data mount
+]
 _kaggle_work = Path("/kaggle/working")
-if _kaggle_in.exists():
+_kaggle_in = next((p for p in _kaggle_candidates if p.exists()), None)
+if _kaggle_in is not None:
     INPUT_DIR = _kaggle_in
-    WORK_DIR = _kaggle_work
+    WORK_DIR = _kaggle_work if _kaggle_work.exists() else Path("outputs/kaggle_xgb_hpo")
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
     ON_KAGGLE = True
 else:
     # Local repo: data/raw
