@@ -1,0 +1,5 @@
+run_id: 002_seasonal_naive_14
+seed: 42
+model:
+  name: seasonal_naive
+  period: 14

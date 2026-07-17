@@ -1,0 +1,5 @@
+run_id: 001_seasonal_naive_7
+seed: 42
+model:
+  name: seasonal_naive
+  period: 7

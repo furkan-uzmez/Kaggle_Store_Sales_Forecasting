@@ -1,0 +1,4 @@
+run_id: 000_last_value
+seed: 42
+model:
+  name: last_value
