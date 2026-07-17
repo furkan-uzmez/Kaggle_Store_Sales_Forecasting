@@ -1,12 +1,16 @@
-"""Generate Kaggle submission from the locked finalist (configs/final.yaml).
+"""Generate Kaggle submission from a GBDT experiment config.
 
-Loads fold models from the locked run (or retrains on full train), runs
-recursive multi-step inference over the test horizon with train history, clips
-negatives when configured, validates against sample_submission, and writes
-``outputs/submissions/submission.csv``.
+Loads fold models from a run directory (or retrains on full train for LightGBM),
+runs recursive multi-step inference over the test horizon with train history,
+clips negatives when configured, validates against sample_submission, and writes
+a submission CSV.
 
 Usage:
   uv run python scripts/predict.py --config configs/final.yaml
+  uv run python scripts/predict.py --config configs/experiments/030_catboost_locked_groups.yaml \\
+      --output outputs/submissions/submission_catboost_030.csv
+  uv run python scripts/predict.py --config configs/experiments/031_xgboost_locked_groups.yaml \\
+      --output outputs/submissions/submission_xgboost_031.csv
 """
 
 from __future__ import annotations
@@ -60,6 +64,85 @@ class _BoosterModel:
                 cols.append(pd.to_numeric(s, errors="coerce").to_numpy(dtype=float))
         mat = np.column_stack(cols) if cols else np.empty((len(frame), 0))
         return np.asarray(self._booster.predict(mat), dtype=float)
+
+
+class _CatBoostFoldModel:
+    """Load a saved CatBoost .cbm and cast categorical columns to str at predict."""
+
+    def __init__(self, path: Path, cat_cols: list[str] | None = None) -> None:
+        from catboost import CatBoostRegressor
+
+        self._model = CatBoostRegressor()
+        self._model.load_model(str(path))
+        names = list(getattr(self._model, "feature_names_", None) or [])
+        if not names and hasattr(self._model, "feature_names_"):
+            names = list(self._model.feature_names_ or [])
+        self._names = names
+        # Default: treat non-numeric training cats as string cats (family).
+        default_cats = [c for c in ("family", "city", "state", "type") if c in names]
+        self._cat_cols = list(cat_cols) if cat_cols is not None else default_cats
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if self._names:
+            frame = X.reindex(columns=self._names).copy()
+        else:
+            frame = X.copy()
+        for col in self._cat_cols:
+            if col in frame.columns:
+                # Training used str cats (wrapper); categorical codes must not leak.
+                if isinstance(frame[col].dtype, pd.CategoricalDtype):
+                    frame[col] = frame[col].astype(str)
+                else:
+                    frame[col] = frame[col].astype(str)
+        return np.asarray(self._model.predict(frame), dtype=float)
+
+
+class _XGBoostFoldModel:
+    """Load a saved XGBoost model JSON and align feature columns.
+
+    Training used pandas Categorical for cat columns (store_nbr, family, …).
+    XGBoost 2.x records that feature type; at predict time those columns must
+    remain categorical (not cast to float codes).
+    """
+
+    def __init__(self, path: Path) -> None:
+        import xgboost as xgb
+
+        self._model = xgb.XGBRegressor()
+        self._model.load_model(str(path))
+        names = getattr(self._model, "feature_names_in_", None)
+        if names is not None:
+            self._names = list(names)
+        else:
+            booster_names = self._model.get_booster().feature_names
+            self._names = list(booster_names) if booster_names else []
+        # Columns treated as categorical during train (_CAT_CANDIDATES).
+        self._cat_like = {
+            c for c in train_mod._CAT_CANDIDATES if c in (self._names or [])
+        }
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if self._names:
+            frame = X.reindex(columns=self._names).copy()
+        else:
+            frame = X.copy()
+        for col in frame.columns:
+            s = frame[col]
+            if col in self._cat_like:
+                # Preserve / restore categorical dtype for XGB cat features.
+                if not (
+                    isinstance(s.dtype, pd.CategoricalDtype) or str(s.dtype) == "category"
+                ):
+                    frame[col] = pd.Categorical(s.astype(str) if s.dtype == object else s)
+            elif not pd.api.types.is_numeric_dtype(s):
+                if isinstance(s.dtype, pd.CategoricalDtype) or str(s.dtype) == "category":
+                    # Non-registered cats: numeric codes as fallback.
+                    codes = s.cat.codes.to_numpy(dtype=float)
+                    codes[codes < 0] = np.nan
+                    frame[col] = codes
+                else:
+                    frame[col] = pd.to_numeric(s, errors="coerce")
+        return np.asarray(self._model.predict(frame), dtype=float)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -135,18 +218,38 @@ def _fit_cat_maps_from_train(
 
 
 def _load_fold_models(run_dir: Path, model_name: str) -> list[Any]:
+    """Load fold models for lightgbm / catboost / xgboost from a run dir."""
     models_dir = run_dir / "models"
     if not models_dir.is_dir():
         raise FileNotFoundError(f"missing models dir: {models_dir}")
-    if model_name != "lightgbm":
+
+    name = model_name.lower().strip()
+    if name == "lightgbm":
+        paths = sorted(models_dir.glob("fold_*.txt"))
+        if not paths:
+            raise FileNotFoundError(f"no fold_*.txt models under {models_dir}")
+        models: list[Any] = [_BoosterModel(p) for p in paths]
+    elif name == "catboost":
+        paths = sorted(models_dir.glob("fold_*.cbm"))
+        if not paths:
+            raise FileNotFoundError(f"no fold_*.cbm models under {models_dir}")
+        models = [_CatBoostFoldModel(p) for p in paths]
+    elif name == "xgboost":
+        paths = sorted(models_dir.glob("fold_*.json"))
+        if not paths:
+            raise FileNotFoundError(f"no fold_*.json models under {models_dir}")
+        models = [_XGBoostFoldModel(p) for p in paths]
+    else:
         raise ValueError(
-            f"predict currently loads LightGBM fold boosters; got model={model_name!r}"
+            f"predict load mode supports lightgbm/catboost/xgboost; got model={model_name!r}"
         )
-    paths = sorted(models_dir.glob("fold_*.txt"))
-    if not paths:
-        raise FileNotFoundError(f"no fold_*.txt models under {models_dir}")
-    models = [_BoosterModel(p) for p in paths]
-    logger.info("Loaded %d fold models from %s", len(models), models_dir)
+
+    logger.info(
+        "Loaded %d fold models (%s) from %s",
+        len(models),
+        name,
+        models_dir,
+    )
     return models
 
 
@@ -423,6 +526,7 @@ def run_predict(
     config_path: Path,
     mode: str = "load",
     output_path: Path | None = None,
+    run_dir_override: Path | None = None,
 ) -> Path:
     paths = ProjectPaths()
     default_cfg = load_default_config()
@@ -434,8 +538,11 @@ def run_predict(
     outputs_dir = paths.root / path_cfg.get("outputs_dir", "outputs")
 
     artifacts = cfg.get("artifacts") or {}
-    run_dir_rel = artifacts.get("run_dir") or f"outputs/runs/{cfg.get('run_id', 'final')}"
-    run_dir = _resolve_path(paths.root, run_dir_rel)
+    if run_dir_override is not None:
+        run_dir = _resolve_path(paths.root, run_dir_override)
+    else:
+        run_dir_rel = artifacts.get("run_dir") or f"outputs/runs/{cfg.get('run_id', 'final')}"
+        run_dir = _resolve_path(paths.root, run_dir_rel)
 
     train = pd.read_parquet(interim_dir / "train.parquet")
     test = pd.read_parquet(interim_dir / "test.parquet")
@@ -455,11 +562,19 @@ def run_predict(
     )
     validate_submission(sub, sample)
 
-    out = output_path or (outputs_dir / "submissions" / "submission.csv")
+    model_name = str((cfg.get("model") or {}).get("name", "model"))
+    run_id = str(cfg.get("run_id", "run"))
+    # Keep locked finalist path stable for configs/final.yaml.
+    if output_path is not None:
+        out = Path(output_path)
+    elif Path(config_path).name == "final.yaml":
+        out = outputs_dir / "submissions" / "submission.csv"
+    else:
+        out = outputs_dir / "submissions" / f"submission_{model_name}_{run_id}.csv"
     out = Path(out)
     write_submission(sub, out, sample=sample)
     logger.info("Wrote submission %s rows=%d", out, len(sub))
-    print(f"submission={out} rows={len(sub)} mode={mode} run_dir={run_dir}")
+    print(f"submission={out} rows={len(sub)} mode={mode} run_dir={run_dir} model={model_name}")
     return out
 
 
@@ -471,14 +586,14 @@ def main() -> None:
         "--config",
         type=Path,
         default=Path("configs/final.yaml"),
-        help="Locked finalist config (default: configs/final.yaml)",
+        help="Experiment or final config (default: configs/final.yaml)",
     )
     parser.add_argument(
         "--mode",
         type=str,
         choices=("load", "retrain"),
         default="load",
-        help="load=average fold models from run_dir; retrain=full-train refit",
+        help="load=average fold models from run_dir; retrain=full-train refit (LGBM path)",
     )
     parser.add_argument(
         "--output",
@@ -486,8 +601,19 @@ def main() -> None:
         default=None,
         help="Override submission path (default outputs/submissions/submission.csv)",
     )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Override run dir with fold models (default: outputs/runs/<run_id>)",
+    )
     args = parser.parse_args()
-    run_predict(config_path=args.config, mode=args.mode, output_path=args.output)
+    run_predict(
+        config_path=args.config,
+        mode=args.mode,
+        output_path=args.output,
+        run_dir_override=args.run_dir,
+    )
 
 
 if __name__ == "__main__":
