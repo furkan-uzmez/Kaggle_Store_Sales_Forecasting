@@ -33,11 +33,12 @@
 # **Metric:** RMSLE (lower is better).  
 # **Local reference:** Local repo LGBM nested HPO was **8/40** trials (best inner ~0.3923); this notebook targets **full 40 trials**.
 #
-# **Runtime notes (Kaggle GPU recommended):**
+# **Runtime notes (CPU by default — standard LightGBM wheels rarely use T4 GPU):**
 # - Default `CFG.n_trials = 40`. Lower to 10–15 if the Kaggle session is time-limited.
 # - Optuna trials persist to **`optuna_lgbm_store_sales.db`** under working dir (resume if file kept).
 # - Trial trees are capped; full retrain uses more trees + early stopping.
 # - Internet not required if Optuna/LightGBM are preinstalled on the image.
+# - Accelerator: **None / CPU** is enough; no need to burn GPU quota for this notebook.
 
 # %% [markdown]
 # ## 0. Config & seeds
@@ -98,8 +99,8 @@ class CFG:
     target_transform: str = "log1p"
     clip_negative: bool = True
 
-    # Device
-    use_gpu: bool = True
+    # Device — CPU only (pip LightGBM has no usable CUDA/OpenCL on typical Kaggle images)
+    use_gpu: bool = False
     n_jobs: int = 4
 
     # Smoke mode (tiny subsample — off by default; set env LGBM_NOTEBOOK_SMOKE=1)
@@ -203,9 +204,10 @@ def inverse_y(y: np.ndarray) -> np.ndarray:
 
 
 def lgbm_device() -> str:
-    """Probe LightGBM GPU (OpenCL). Many Kaggle images fall back to CPU — that is OK."""
+    """Always CPU unless CFG.use_gpu is explicitly enabled (not recommended on Kaggle)."""
     if not CFG.use_gpu:
         return "cpu"
+    # Optional probe only if user flips use_gpu=True (OpenCL/CUDA builds are rare).
     try:
         X = np.zeros((8, 2), dtype=np.float32)
         y = np.zeros(8, dtype=np.float32)
@@ -228,7 +230,7 @@ def lgbm_device() -> str:
 
 
 DEVICE = lgbm_device()
-print("LightGBM device:", DEVICE)
+print("LightGBM device:", DEVICE, "(use_gpu=%s)" % CFG.use_gpu)
 
 # %% [markdown]
 # ## 3. Load & light clean
