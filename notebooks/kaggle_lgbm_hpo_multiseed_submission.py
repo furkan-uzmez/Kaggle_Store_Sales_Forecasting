@@ -25,7 +25,7 @@
 #    `/kaggle/input/competitions/store-sales-time-series-forecasting`
 # 2. Leakage-safe features: calendar, promo, **past-only** lag / rolling
 # 3. Expanding walk-forward outer folds (3 × 15-day val windows at the train end)
-# 4. **Nested temporal HPO** (Optuna): inner score = last 15 days of each **outer train only**
+# 4. **Nested temporal HPO** (Optuna + **SQLite DB**): inner score = last 15 days of each **outer train only**
 # 5. **Multi-seed** outer CV with seeds `{42, 43, 44}` using best params
 # 6. Retrain on full train (last-15d ES holdout) per seed → recursive multi-step test predict
 # 7. Mean ensemble of seed models → **`/kaggle/working/submission.csv`**
@@ -35,6 +35,7 @@
 #
 # **Runtime notes (Kaggle GPU recommended):**
 # - Default `CFG.n_trials = 40`. Lower to 10–15 if the Kaggle session is time-limited.
+# - Optuna trials persist to **`optuna_lgbm_store_sales.db`** under working dir (resume if file kept).
 # - Trial trees are capped; full retrain uses more trees + early stopping.
 # - Internet not required if Optuna/LightGBM are preinstalled on the image.
 
@@ -88,6 +89,10 @@ class CFG:
     trial_early_stopping: int = 40
     retrain_n_estimators: int = 2000
     retrain_early_stopping: int = 50
+    # Optuna SQLite persistence (under WORK_DIR)
+    study_name: str = "lgbm_store_sales_nested"
+    optuna_db_name: str = "optuna_lgbm_store_sales.db"
+    optuna_load_if_exists: bool = True
 
     # Target / post
     target_transform: str = "log1p"
@@ -139,9 +144,13 @@ else:
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     ON_KAGGLE = False
 
+OPTUNA_DB_PATH = WORK_DIR / CFG.optuna_db_name
+OPTUNA_STORAGE = f"sqlite:///{OPTUNA_DB_PATH.resolve()}"
+
 print(f"ON_KAGGLE={ON_KAGGLE}")
 print(f"INPUT_DIR={INPUT_DIR}")
 print(f"WORK_DIR={WORK_DIR}")
+print(f"OPTUNA_DB={OPTUNA_DB_PATH}")
 print(f"CFG.n_trials={CFG.n_trials} seeds={CFG.seeds}")
 
 # %% [markdown]
@@ -561,10 +570,18 @@ def split_last_block(
     return inner_train_end, val_start, val_end
 
 # %% [markdown]
-# ## 7. Nested temporal Optuna HPO
+# ## 7. Nested temporal Optuna HPO (SQLite DB)
 #
 # For each trial `P`: for each outer fold, score only on the **last 15 days of that fold's train**
 # (never the outer validation window). Objective = mean inner RMSLE.
+#
+# **Persistence:** trials are stored in SQLite:
+# - Path: `WORK_DIR / optuna_lgbm_store_sales.db` (e.g. `/kaggle/working/optuna_lgbm_store_sales.db`)
+# - `load_if_exists=True` → re-running HPO **resumes** and only schedules remaining trials up to `n_trials`
+# - Also exports `trials.csv` + `lgbm_hpo_summary.json` for easy inspection
+#
+# **Kaggle tip:** to resume across Save Versions, download the `.db` from a previous run and
+# re-upload as a dataset / copy into `/kaggle/working` before HPO, or keep the same session.
 
 # %%
 def evaluate_params_inner(params: dict[str, Any], seed: int = CFG.seed) -> tuple[float, list[float]]:
@@ -601,6 +618,10 @@ def evaluate_params_inner(params: dict[str, Any], seed: int = CFG.seed) -> tuple
     return float(np.mean(scores)), scores
 
 
+def _n_complete_trials(study: optuna.Study) -> int:
+    return sum(1 for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE)
+
+
 def run_hpo(n_trials: int) -> optuna.Study:
     def objective(trial: optuna.Trial) -> float:
         # Align with configs/tuning/lightgbm.yaml search_space
@@ -613,34 +634,81 @@ def run_hpo(n_trials: int) -> optuna.Study:
         }
         mean_score, fold_scores = evaluate_params_inner(params, seed=CFG.seed)
         trial.set_user_attr("fold_scores", fold_scores)
-        trial.set_user_attr("std", float(np.std(fold_scores, ddof=1)) if len(fold_scores) > 1 else 0.0)
+        trial.set_user_attr(
+            "std",
+            float(np.std(fold_scores, ddof=1)) if len(fold_scores) > 1 else 0.0,
+        )
+        # Optional: flush user attrs already in DB via storage
         return mean_score
 
+    # SQLite RDB storage — survives process restarts if the .db file remains
+    OPTUNA_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    storage = OPTUNA_STORAGE
+    print(f"Optuna storage: {storage}")
+    print(f"DB file exists: {OPTUNA_DB_PATH.exists()} path={OPTUNA_DB_PATH}")
+
     study = optuna.create_study(
+        study_name=CFG.study_name,
+        storage=storage,
+        load_if_exists=bool(CFG.optuna_load_if_exists),
         direction="minimize",
         sampler=optuna.samplers.TPESampler(seed=CFG.seed),
-        study_name="lgbm_store_sales_nested",
     )
+
+    n_done = _n_complete_trials(study)
+    n_target = int(n_trials)
+    n_remaining = max(0, n_target - n_done)
+    print(
+        f"Study={CFG.study_name!r} complete_trials={n_done} "
+        f"target={n_target} remaining={n_remaining}"
+    )
+
     t0 = time.time()
-    study.optimize(objective, n_trials=int(n_trials), show_progress_bar=not ON_KAGGLE)
-    print(f"HPO finished {len(study.trials)} trials in {(time.time()-t0)/60:.1f} min")
+    if n_remaining > 0:
+        study.optimize(
+            objective,
+            n_trials=n_remaining,
+            show_progress_bar=not ON_KAGGLE,
+        )
+    else:
+        print("Target trial budget already reached; skipping optimize().")
+
+    elapsed_min = (time.time() - t0) / 60.0
+    n_complete = _n_complete_trials(study)
+    print(
+        f"HPO finished complete={n_complete}/{n_target} "
+        f"(all_states={len(study.trials)}) in {elapsed_min:.1f} min"
+    )
     print("best value", study.best_value)
     print("best params", study.best_params)
+    print(f"SQLite DB: {OPTUNA_DB_PATH} size_bytes={OPTUNA_DB_PATH.stat().st_size}")
     return study
 
 
 study = run_hpo(CFG.n_trials if not CFG.smoke else 2)
 BEST_PARAMS = dict(study.best_params)
 
-# Persist HPO summary
+# Persist HPO summary + trial table (human-readable alongside the DB)
+trials_df = study.trials_dataframe(
+    attrs=("number", "value", "params", "user_attrs", "state", "datetime_start", "datetime_complete")
+)
+trials_csv = WORK_DIR / "trials.csv"
+trials_df.to_csv(trials_csv, index=False)
+print("Wrote", trials_csv, "rows", len(trials_df))
+
 hpo_path = WORK_DIR / "lgbm_hpo_summary.json"
 hpo_path.write_text(
     json.dumps(
         {
             "best_value": study.best_value,
             "best_params": BEST_PARAMS,
-            "n_trials": len(study.trials),
+            "n_trials_complete": _n_complete_trials(study),
+            "n_trials_all_states": len(study.trials),
+            "n_trials_target": int(CFG.n_trials if not CFG.smoke else 2),
             "device": DEVICE,
+            "optuna_storage": OPTUNA_STORAGE,
+            "optuna_db": str(OPTUNA_DB_PATH),
+            "study_name": CFG.study_name,
             "outer_folds": [
                 {k: (str(v) if isinstance(v, pd.Timestamp) else v) for k, v in f.items()}
                 for f in OUTER_FOLDS
@@ -651,6 +719,7 @@ hpo_path.write_text(
     encoding="utf-8",
 )
 print("Wrote", hpo_path)
+print("Optuna DB (copy/download to resume later):", OPTUNA_DB_PATH)
 
 # %% [markdown]
 # ## 8. Multi-seed outer walk-forward (best params)
@@ -864,8 +933,12 @@ card = {
     "multi_seed_mean": float(multi_df["mean_rmsle"].mean()),
     "multi_seed_std": float(multi_df["mean_rmsle"].std(ddof=1)) if len(multi_df) > 1 else 0.0,
     "seeds": CFG.seeds,
-    "n_trials": len(study.trials),
-    "n_trials_target": 40,
+    "n_trials_complete": _n_complete_trials(study),
+    "n_trials_all_states": len(study.trials),
+    "n_trials_target": 40 if not CFG.smoke else 2,
+    "optuna_db": str(OPTUNA_DB_PATH),
+    "optuna_storage": OPTUNA_STORAGE,
+    "study_name": CFG.study_name,
     "device": DEVICE,
     "submission": str(out_path),
     "n_rows": int(len(sub)),
@@ -879,11 +952,11 @@ print(json.dumps(card, indent=2)[:1200])
 #
 # | Step | Result |
 # | --- | --- |
-# | Nested HPO (40 trials) | Best params in `lgbm_hpo_summary.json`; inner mean RMSLE only |
+# | Nested HPO (40 trials) | SQLite `optuna_lgbm_store_sales.db` + `trials.csv` + `lgbm_hpo_summary.json` |
 # | Multi-seed outer | `lgbm_multiseed_outer.csv` — seeds 42/43/44 |
 # | Submission | Seed-mean recursive preds → **`submission.csv`** |
 # | Compare | Public LB vs prior LGBM `submission.csv` **0.47064** and XGB **0.44139** |
 #
-# **Observation:** Nested HPO never peeks outer val or public LB.  
+# **Observation:** Nested HPO never peeks outer val or public LB; trials are DB-backed.  
 # **Interpretation:** Completing 40 trials may beat the local repo's partial 8-trial HPO.  
-# **Action:** If public RMSLE improves vs 0.47064, update `docs/kaggle_public_scores.md` and consider re-locking `configs/final.yaml`.
+# **Action:** Keep/download the `.db` to resume; if public RMSLE improves vs 0.47064, update scores docs / re-lock.
