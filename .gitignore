@@ -1,17 +1,38 @@
+# env / secrets
 .venv/
+.env
+.env.*
+
+# python / tooling
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
 .ipynb_checkpoints/
+.DS_Store
+
+# local agent / session tooling (not part of the public package)
+.agent/
+.superpowers/
+
+# competition data & generated artifacts (reproduce locally; do not publish)
 data/raw/*
 !data/raw/.gitkeep
 data/interim/*
 !data/interim/.gitkeep
+data/splits/*
+!data/splits/.gitkeep
 outputs/*
 !outputs/.gitkeep
+
+# binary / ML artifacts
 *.parquet
 *.pkl
 *.joblib
-.DS_Store
-.env
+*.cbm
+*.db
+*.sqlite
+*.sqlite3
+
+# local-only competition page clippings
+kaggle_competation_pages/

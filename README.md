@@ -4,13 +4,15 @@ Leakage-safe hybrid pipeline for the Kaggle [Store Sales - Time Series Forecasti
 
 **Problem one-liner:** predict daily unit sales for thousands of `(store_nbr, family)` series over a **15-day** horizon, using promotions, oil, holidays, stores, and transactions—without temporal leakage.
 
-**Headline (local CV only):** locked LightGBM multi-seed walk-forward mean RMSLE **0.3933 ± 0.0004**, beating the seasonal-naive-7 floor **~0.5513** by ~0.158. **No public leaderboard scores are claimed here.**
+**Headline (local CV):** locked LightGBM multi-seed walk-forward mean RMSLE **0.3933 ± 0.0004**, beating the seasonal-naive-7 floor **~0.5513** by ~0.158.
 
-This is a portfolio / learning project: notebooks decide, `src/` implements, `scripts/` execute, and `outputs/` stores evidence.
+**Headline (public LB snapshot, 2026-07-17):** among three submitted challengers, **XGBoost 0.44139** &lt; CatBoost 0.46567 &lt; locked LightGBM 0.47064 (lower is better). Local CV and public LB **are not interchangeable** — see [docs/kaggle_public_scores.md](docs/kaggle_public_scores.md).
+
+This is a portfolio / learning project: notebooks decide, `src/` implements, `scripts/` execute, and `outputs/` stores **local** evidence (gitignored; regenerate with the reproduce steps below).
 
 ## Results (local walk-forward CV)
 
-Primary metric is **fold-mean RMSLE** on the fixed 3-fold expanding walk-forward splits in `data/splits/`. Same folds and shared `store_sales.metrics.rmsle` for every row below. Figures are **not** Kaggle public/private LB.
+Primary metric is **fold-mean RMSLE** on fixed 3-fold expanding walk-forward splits produced by `scripts/prepare_data.py` under `data/splits/` (local only). Same folds and shared `store_sales.metrics.rmsle` for every row below.
 
 | Model | Config / source | Local CV mean RMSLE | Notes |
 | --- | --- | --- | --- |
@@ -22,15 +24,29 @@ Primary metric is **fold-mean RMSLE** on the fixed 3-fold expanding walk-forward
 | XGBoost multi-seed | `031_xgboost_locked_groups` | ~0.3990 ± 0.0029 | secondary challenger |
 | CatBoost multi-seed | `030_catboost_locked_groups` | ~0.4117 ± 0.0011 | tertiary challenger |
 
-Evidence files:
+### Public leaderboard (recorded snapshot)
 
-- Multi-seed summary: [`outputs/reports/multi_seed_summary.csv`](outputs/reports/multi_seed_summary.csv)
-- Locked evaluation: [`outputs/final_evaluation/metrics.json`](outputs/final_evaluation/metrics.json)
-- Baselines vs final: [`outputs/reports/final_results/baselines_vs_final.csv`](outputs/reports/final_results/baselines_vs_final.csv)
-- Stress battery: [`outputs/stress/default/summary.json`](outputs/stress/default/summary.json)
-- Submission artifact: [`outputs/submissions/submission.csv`](outputs/submissions/submission.csv) (28 512 rows, `id,sales`)
+| Public rank (among these 3) | Submission | Model | Public RMSLE | Local CV (ref.) |
+| ---: | --- | --- | ---: | --- |
+| 1 | `submission_xgboost_031.csv` | XGBoost `031` fold-mean ensemble | **0.44139** | multi-seed ~0.399 |
+| 2 | `submission_catboost_030.csv` | CatBoost `030` fold-mean ensemble | **0.46567** | multi-seed ~0.412 |
+| 3 | `submission.csv` | LightGBM locked finalist | **0.47064** | multi-seed **0.3933 ± 0.0004** |
 
-**Locked ship path:** single LightGBM (`configs/final.yaml`), feature groups `[base, calendar, promo, lag, rolling]`, `log1p` target, non-negative clip, primary seed **42**. Optional OOF blend of LGBM/XGB/CB was measured slightly better on pooled OOF but **not** locked (higher ops cost, worse seed stability than single LGBM).
+Full notes, regenerate commands, and caveats: **[docs/kaggle_public_scores.md](docs/kaggle_public_scores.md)**.
+
+### Local evidence (not in git)
+
+After you download data and run the reproduce pipeline, artifacts appear under `outputs/` (gitignored). Typical paths:
+
+| Artifact | Local path (after reproduce) |
+| --- | --- |
+| Multi-seed summary | `outputs/reports/multi_seed_summary.csv` |
+| Locked evaluation | `outputs/final_evaluation/metrics.json` |
+| Baselines vs final | `outputs/reports/final_results/baselines_vs_final.csv` |
+| Stress battery | `outputs/stress/default/summary.json` |
+| Submission CSV | `outputs/submissions/submission.csv` (28 512 rows, `id,sales`) |
+
+**Locked ship path:** single LightGBM (`configs/final.yaml`), feature groups `[base, calendar, promo, lag, rolling]`, `log1p` target, non-negative clip, primary seed **42**. Optional OOF blend of LGBM/XGB/CB was measured slightly better on pooled OOF but **not** locked (higher ops cost, worse seed stability than single LGBM). On public LB, XGBoost currently scores better; LGBM remains the repo-locked primary until a deliberate re-lock.
 
 ## Requirements
 
@@ -179,7 +195,7 @@ Do not change groups, params, or seeds after lock without a **new experiment id*
 
 ## Notebooks
 
-Decision-layer notebooks only (`01`–`04`). Notebooks decide; `src/` implements; `scripts/` execute. Jupytext pairs (`.ipynb` + `.py:percent`) for each.
+Decision-layer notebooks (`01`–`04`) plus self-contained Kaggle HPO notebooks. Notebooks decide; `src/` implements; `scripts/` execute. Jupytext pairs (`.ipynb` + `.py:percent`) for each.
 
 | Notebook | Status | Role |
 | --- | --- | --- |
@@ -187,12 +203,17 @@ Decision-layer notebooks only (`01`–`04`). Notebooks decide; `src/` implements
 | `notebooks/02_baseline_and_feature_design.ipynb` | Done | Feature groups, experiment matrix, ablation decisions |
 | `notebooks/03_model_analysis.ipynb` | Done | GBDT ladder, multi-seed, stress, lock rationale → `final.yaml` |
 | `notebooks/04_final_results.ipynb` | Done | Locked report, evaluate/predict path, `submission.csv` sanity |
+| `notebooks/kaggle_*_hpo_multiseed_submission.ipynb` | Done | Nested HPO + multi-seed + recursive submission (LGBM / XGB / CatBoost) |
+| `notebooks/kaggle_*_joint_fs_hpo_submission.ipynb` | Done | Joint feature-group flags + HPO (LGBM / XGB / CatBoost) |
+
+Analysis notebooks are stored **without executed outputs** (no local absolute paths). Re-run them after `prepare_data` to regenerate figures.
 
 ## Layout (hybrid `src/store_sales`)
 
 ```text
 Kaggle_Store_Sales_Forecasting/
 ├── README.md
+├── LICENSE
 ├── pyproject.toml
 ├── uv.lock
 ├── configs/
@@ -203,9 +224,9 @@ Kaggle_Store_Sales_Forecasting/
 │   └── tuning/lightgbm.yaml
 ├── data/
 │   ├── raw/                    # Kaggle CSVs (gitignored)
-│   ├── interim/                # cleaned parquet
-│   └── splits/                 # walk-forward fold manifests
-├── notebooks/                  # 01–04 decision layer
+│   ├── interim/                # cleaned parquet (gitignored)
+│   └── splits/                 # walk-forward fold manifests (gitignored)
+├── notebooks/                  # decision layer + Kaggle HPO notebooks
 ├── src/store_sales/
 │   ├── config.py
 │   ├── data/                   # load, validate, clean, split, outliers
@@ -225,9 +246,10 @@ Kaggle_Store_Sales_Forecasting/
 │   ├── evaluate.py
 │   ├── predict.py
 │   └── blend_oof.py
-├── outputs/                    # runs, reports, stress, submissions
+├── outputs/                    # local only (gitignored)
 ├── tests/
-└── docs/superpowers/
+└── docs/
+    └── kaggle_public_scores.md
 ```
 
 ## Tests
@@ -249,7 +271,7 @@ uv run pytest tests/ -v
 | Nested temporal HPO | `scripts/tune.py` + `outputs/hpo/lgbm_store_sales/` (frozen before lock) |
 | Final report plots | `outputs/reports/final_results/` |
 
-Trust **local CV** over public LB. If CV improves but LB drops (or vice versa), suspect leakage or shift — do not keep the change without a new experiment id.
+Use **local CV for selection** and treat public LB as an external check (see score gap in [docs/kaggle_public_scores.md](docs/kaggle_public_scores.md)). If CV improves but LB drops (or vice versa), suspect leakage or shift — do not keep the change without a new experiment id.
 
 ## Troubleshooting
 
@@ -271,11 +293,11 @@ Trust **local CV** over public LB. If CV improves but LB drops (or vice versa), 
 
 | Doc | Path |
 | --- | --- |
-| Design spec | [docs/superpowers/specs/2026-07-17-store-sales-forecasting-design.md](docs/superpowers/specs/2026-07-17-store-sales-forecasting-design.md) |
-| Implementation plan | [docs/superpowers/plans/2026-07-17-store-sales-forecasting.md](docs/superpowers/plans/2026-07-17-store-sales-forecasting.md) |
-| Skill routing table | [.agent/ml-project-skill-routing-table.md](.agent/ml-project-skill-routing-table.md) |
-| Competition clippings | [kaggle_competation_pages/](kaggle_competation_pages/) |
+| Public LB scores (snapshot) | [docs/kaggle_public_scores.md](docs/kaggle_public_scores.md) |
+| Locked config | [configs/final.yaml](configs/final.yaml) |
+| Competition | [Store Sales - Time Series Forecasting](https://www.kaggle.com/competitions/store-sales-time-series-forecasting) |
 
 ## License / data notice
 
-Competition data is subject to [Kaggle competition rules](https://www.kaggle.com/competitions/store-sales-time-series-forecasting/rules). Do not redistribute raw competition files or credentials.
+- **Code** in this repository is released under the [MIT License](LICENSE).
+- **Competition data** is subject to [Kaggle competition rules](https://www.kaggle.com/competitions/store-sales-time-series-forecasting/rules). This repo does **not** ship raw CSVs, model weights, or `kaggle.json`. Download data yourself after accepting the rules; do not commit credentials or competition dumps.
