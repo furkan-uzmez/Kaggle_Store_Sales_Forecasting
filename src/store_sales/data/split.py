@@ -112,6 +112,105 @@ def build_expanding_folds(
     return folds
 
 
+def split_last_block(
+    train_df: pd.DataFrame,
+    *,
+    date_col: str = "date",
+    val_days: int = 15,
+    gap_days: int = 0,
+) -> dict[str, Any]:
+    """Split an outer-train frame into inner_train + last-block inner_val.
+
+    Used by nested temporal HPO: evaluation windows are carved only from the
+    outer training slice so outer val / LB / test never enter the trial loop.
+
+    Parameters
+    ----------
+    train_df:
+        Outer-fold training panel (already excludes outer validation).
+    date_col:
+        Timestamp column.
+    val_days:
+        Number of unique dates in the inner validation block (trailing).
+    gap_days:
+        Number of unique dates dropped between inner_train and inner_val
+        (embargo). ``0`` places val immediately after train.
+
+    Returns
+    -------
+    dict with keys:
+        ``train_idx``, ``val_idx`` (index arrays into ``train_df``),
+        ``train_end``, ``val_start``, ``val_end`` (Timestamps).
+
+    Invariants
+    ----------
+    - ``set(val_idx) ⊆ train_df.index`` and ``set(train_idx) ⊆ train_df.index``
+    - ``max(train dates) < min(val dates)``
+    - gap of at least ``gap_days`` unique dates between partitions when gap>0
+    """
+    if val_days < 1:
+        raise ValueError(f"val_days must be >= 1, got {val_days}")
+    if gap_days < 0:
+        raise ValueError(f"gap_days must be >= 0, got {gap_days}")
+    if date_col not in train_df.columns:
+        raise KeyError(f"date_col {date_col!r} not in train_df columns")
+    if len(train_df) == 0:
+        raise ValueError("train_df is empty; cannot build inner split")
+
+    dates = np.array(sorted(pd.to_datetime(train_df[date_col]).unique()))
+    need = val_days + gap_days + 1  # at least one train day
+    if len(dates) < need:
+        raise ValueError(
+            f"insufficient unique dates for inner split: have {len(dates)}, "
+            f"need at least {need} (val_days={val_days}, gap_days={gap_days})"
+        )
+
+    val_end_i = len(dates) - 1
+    val_start_i = val_end_i - val_days + 1
+    train_end_i = val_start_i - gap_days - 1
+    if train_end_i < 0 or val_start_i < 0:
+        raise ValueError(
+            f"insufficient history for inner split: "
+            f"val_days={val_days}, gap_days={gap_days}, n_dates={len(dates)}"
+        )
+
+    train_end = pd.Timestamp(dates[train_end_i])
+    val_start = pd.Timestamp(dates[val_start_i])
+    val_end = pd.Timestamp(dates[val_end_i])
+
+    date_series = pd.to_datetime(train_df[date_col])
+    train_mask = date_series <= train_end
+    val_mask = (date_series >= val_start) & (date_series <= val_end)
+
+    train_idx = train_df.index[train_mask].to_numpy()
+    val_idx = train_df.index[val_mask].to_numpy()
+    if len(train_idx) == 0 or len(val_idx) == 0:
+        raise ValueError("inner split produced empty train or val partition")
+
+    train_dates = date_series.loc[train_idx]
+    val_dates = date_series.loc[val_idx]
+    if train_dates.max() >= val_dates.min():
+        raise RuntimeError(
+            f"Temporal leakage in inner split: "
+            f"train_max={train_dates.max()} val_min={val_dates.min()}"
+        )
+    if gap_days > 0:
+        # Count unique dates strictly between partitions.
+        between = dates[(dates > train_dates.max()) & (dates < val_dates.min())]
+        if len(between) < gap_days:
+            raise RuntimeError(
+                f"gap_days={gap_days} not respected: observed gap dates={len(between)}"
+            )
+
+    return {
+        "train_idx": train_idx,
+        "val_idx": val_idx,
+        "train_end": train_end,
+        "val_start": val_start,
+        "val_end": val_end,
+    }
+
+
 def save_fold_manifests(folds: list[dict[str, Any]], splits_dir: Path) -> None:
     """Write per-fold index parquets and folds_meta.json under splits_dir."""
     splits_dir = Path(splits_dir)

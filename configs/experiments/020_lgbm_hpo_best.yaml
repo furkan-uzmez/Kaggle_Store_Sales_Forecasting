@@ -1,0 +1,33 @@
+run_id: 020_lgbm_hpo_best
+seed: 42
+feature_groups:
+- base
+- calendar
+- promo
+- lag
+- rolling
+model:
+  name: lightgbm
+  params:
+    n_estimators: 2000
+    learning_rate: 0.030710573677773714
+    num_leaves: 244
+    min_child_samples: 76
+    subsample: 0.8394633936788146
+    colsample_bytree: 0.6624074561769746
+  early_stopping_rounds: 50
+target_transform: log1p
+clip_negative_preds: true
+metrics:
+  primary: rmsle
+  secondary:
+  - mae_log1p
+hpo_source:
+  study_name: lgbm_store_sales
+  best_inner_mean_rmsle: 0.3922891004702278
+  best_params:
+    learning_rate: 0.030710573677773714
+    num_leaves: 244
+    min_child_samples: 76
+    subsample: 0.8394633936788146
+    colsample_bytree: 0.6624074561769746
