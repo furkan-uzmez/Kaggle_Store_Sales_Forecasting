@@ -1,0 +1,18 @@
+run_id: 014_lgbm_plus_rolling
+seed: 42
+feature_groups: [base, calendar, promo, lag, rolling]
+model:
+  name: lightgbm
+  params:
+    n_estimators: 500
+    learning_rate: 0.05
+    num_leaves: 63
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_samples: 50
+  early_stopping_rounds: 50
+target_transform: log1p
+clip_negative_preds: true
+metrics:
+  primary: rmsle
+  secondary: [mae_log1p]
