@@ -1,0 +1,94 @@
+# Locked Layer-2 finalist (Task 14). Consumed by evaluate/predict (Layer 3).
+# Do not retune or change feature groups after this lock without a new experiment id.
+
+run_id: 020_lgbm_hpo_best
+primary_seed: 42
+seeds: [42, 43, 44]
+
+model:
+  name: lightgbm
+  params:
+    n_estimators: 2000
+    learning_rate: 0.030710573677773714
+    num_leaves: 244
+    min_child_samples: 76
+    subsample: 0.8394633936788146
+    colsample_bytree: 0.6624074561769746
+  early_stopping_rounds: 50
+
+feature_groups:
+  - base
+  - calendar
+  - promo
+  - lag
+  - rolling
+
+target_transform: log1p
+clip_negative_preds: true
+
+# Entity / time contract (mirrors default.yaml)
+entity_cols: [store_nbr, family]
+date_col: date
+target_col: sales
+horizon_days: 15
+metric: rmsle
+
+# Multi-seed evidence (outputs/reports/multi_seed_summary.csv)
+multi_seed:
+  mean_across_seeds: 0.39332300379718105
+  std_across_seeds: 0.0004009302285278899
+  worst_seed_rmsle: 0.3935884009801714
+  best_seed_rmsle: 0.39286179599791077
+  seed_42_mean_rmsle: 0.3935188144134609
+  seed_43_mean_rmsle: 0.39286179599791077
+  seed_44_mean_rmsle: 0.3935884009801714
+
+# Primary run artifacts
+artifacts:
+  run_dir: outputs/runs/020_lgbm_hpo_best
+  metrics: outputs/runs/020_lgbm_hpo_best/metrics.json
+  oof: outputs/runs/020_lgbm_hpo_best/oof_predictions.parquet
+  multi_seed_summary: outputs/reports/multi_seed_summary.csv
+  stress_summary: outputs/stress/default/summary.json
+  stress_config: configs/stress/default.yaml
+
+# Blend policy: optional OOF nonneg blend slightly better but NOT locked as primary
+blend:
+  enabled: false
+  method: null
+  members: []
+  note: >
+    Nonneg OOF blend of LGBM/XGB/CB reached ~0.3929 vs LGBM member OOF ~0.3937
+    (weights ≈ 0.84 / 0.14 / 0.02). Rejected as primary ship path: single LGBM
+    has lower seed variance (std≈0.0004 vs XGB≈0.0029) and simpler ops; blend
+    remains an optional offline ensemble experiment (040_mean_blend_finalists).
+
+# Challenger ranking (same locked groups; multi-seed)
+challengers:
+  secondary:
+    run_id: 031_xgboost_locked_groups
+    model: xgboost
+    mean_across_seeds: 0.39902755294353875
+  tertiary:
+    run_id: 030_catboost_locked_groups
+    model: catboost
+    mean_across_seeds: 0.41174111742770153
+
+gpu: true
+hpo_source:
+  study_name: lgbm_store_sales
+  best_inner_mean_rmsle: 0.3922891004702278
+
+rationale: >
+  Prefer LightGBM 020_lgbm_hpo_best as the locked finalist. Multi-seed walk-forward
+  mean RMSLE is 0.3933 ± 0.0004 (seeds 42/43/44) — best mean and tightest seed
+  stability among LGBM/XGB/CB under identical feature groups
+  [base, calendar, promo, lag, rolling], log1p target, and non-negative clip.
+  XGBoost is secondary (mean 0.3990, higher seed std); CatBoost tertiary (0.4117).
+  Optional nonneg OOF blend improves pooled OOF by ~0.0008 but is not locked as
+  primary due to ops complexity and LGBM’s superior multi-seed stability. Robustness
+  battery (outputs/stress/default/summary.json): 5% relative noise ΔRMSLE≈+0.0005,
+  10% noise ≈+0.0023, lag spike clip ≈+0.0009 (graceful); oil/holiday join failure
+  N/A (groups excluded); payday subset RMSLE≈0.409 vs clean≈0.394 (known weak
+  slice). Primary seed 42 for single-run artifacts and submission training; report
+  multi-seed band in final results. No further HPO after this lock.

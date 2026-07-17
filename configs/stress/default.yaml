@@ -1,0 +1,72 @@
+# Robustness battery for locked finalist (Task 14).
+# Perturbations are prediction-time feature stresses on frozen fold models.
+
+run_id: 020_lgbm_hpo_best
+run_dir: outputs/runs/020_lgbm_hpo_best
+output_dir: outputs/stress/default
+seed: 42
+
+# Key continuous / count features for relative Gaussian noise
+noise:
+  relative_levels: [0.05, 0.10]
+  columns:
+    - onpromotion
+    - onpromotion_log1p
+    - sales_lag_1
+    - sales_lag_7
+    - sales_lag_14
+    - sales_lag_28
+    - sales_roll_mean_7
+    - sales_roll_std_7
+    - sales_roll_mean_14
+    - sales_roll_std_14
+    - sales_roll_mean_28
+    - sales_roll_std_28
+  non_negative:
+    - onpromotion
+    - onpromotion_log1p
+    - sales_lag_1
+    - sales_lag_7
+    - sales_lag_14
+    - sales_lag_28
+    - sales_roll_mean_7
+    - sales_roll_std_7
+    - sales_roll_mean_14
+    - sales_roll_std_14
+    - sales_roll_mean_28
+    - sales_roll_std_28
+
+# Simulate oil/holiday join failure (null those columns when present)
+missing_join:
+  columns:
+    - oil_lag_1
+    - dcoilwtico
+    - oil_roll_mean_7
+    - is_holiday
+    - is_transfer
+    - is_additional
+    - is_bridge
+    - is_work_day
+    - is_event
+    - holiday_type_encoded
+    - locale_name_encoded
+
+# Payday / month-end subset RMSLE vs complement (uses clean OOF labels)
+payday:
+  day_col: day
+  payday_days: [15]  # also month-end via calendar is_payday when available
+
+# Lag-history spike clipping (upper quantile on lag/rolling columns)
+lag_spike_clip:
+  upper_quantile: 0.99
+  columns:
+    - sales_lag_1
+    - sales_lag_7
+    - sales_lag_14
+    - sales_lag_28
+    - sales_roll_mean_7
+    - sales_roll_std_7
+    - sales_roll_mean_14
+    - sales_roll_std_14
+    - sales_roll_mean_28
+    - sales_roll_std_28
