@@ -1,0 +1,62 @@
+# Nested temporal HPO for LightGBM (Task 12 executes; this file is the protocol contract).
+# Outer folds = walk-forward manifests under data/splits/.
+# Inner eval = last val_days of each outer train only (never outer val / LB / test).
+
+study_name: lgbm_store_sales
+metric: mean_rmsle
+direction: minimize
+n_trials: 40
+seed: 42
+
+outer:
+  folds: manifests  # data/splits/folds_meta.json + fold_*_*.parquet
+
+inner:
+  strategy: last_train_block
+  val_days: 15
+  # Optional embargo between inner_train and inner_val; 0 matches current manifests.
+  gap_days: 0
+
+# Locked feature groups for HPO (from notebook 02 / group ablation plan).
+# Do not expand the space mid-study without invalidating trials.
+feature_groups: [base, calendar, promo, lag, rolling]
+
+model:
+  name: lightgbm
+  target_transform: log1p
+  clip_negative_preds: true
+  # n_estimators controlled by early stopping; not a free search dim by default.
+  fixed:
+    n_estimators: 2000
+    early_stopping_rounds: 50
+    objective: regression
+    verbosity: -1
+
+search_space:
+  learning_rate: {type: log_float, low: 0.01, high: 0.2}
+  num_leaves: {type: int, low: 31, high: 255}
+  min_child_samples: {type: int, low: 10, high: 100}
+  subsample: {type: float, low: 0.6, high: 1.0}
+  colsample_bytree: {type: float, low: 0.6, high: 1.0}
+
+protocol:
+  # For each Optuna trial params P:
+  #   scores = []
+  #   for each outer fold f in folds_meta:
+  #     train_f = rows with date <= train_end_f
+  #     # NEVER use outer val rows (val_start_f .. val_end_f) inside the trial
+  #     inner_train, inner_val = split_last_block(train_f, val_days=15, gap=gap_days)
+  #     mask_target_after(inner_train∪inner_val panel, origin=inner_train_end) before lag/rolling
+  #     fit model(P) on inner_train; score RMSLE on inner_val (recursive if lag/rolling)
+  #     scores.append(rmsle)
+  #   objective = mean(scores)  # optionally report std
+  # After study: retrain best P via scripts/train.py on full outer folds; persist run dir.
+  never_use: [outer_val, competition_test, public_lb]
+  recursive_multi_step: true  # when feature_groups include lag or rolling
+  artifacts_dir: outputs/hpo/lgbm_store_sales
+  required_artifacts:
+    - best_params.yaml
+    - trials.csv
+    - study_summary.json
+    - environment.json
+    - nested_protocol.json

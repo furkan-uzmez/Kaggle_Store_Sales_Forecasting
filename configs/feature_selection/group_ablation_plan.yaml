@@ -1,0 +1,122 @@
+# Formal feature-group selection plan (feature-selection-optimization + TTS FS).
+# Selection unit = FEATURE GROUP, not individual columns (default).
+# Evidence: walk-forward runs 000–002 (naive) and 010–014 (LGBM progressive core).
+
+name: group_ablation_plan
+metric: mean_rmsle
+direction: minimize
+seed: 42
+
+baseline:
+  naive_floor_run: 001_seasonal_naive_7
+  naive_floor_mean_rmsle: 0.5513
+  last_value_run: 000_last_value
+  sn14_run: 002_seasonal_naive_14
+  # A selected LGBM subset must beat sn7 on the same outer folds.
+
+outer_folds:
+  source: data/splits/folds_meta.json
+  n_folds: 3
+  val_days: 15
+  strategy: expanding_walk_forward
+
+# ---------------------------------------------------------------------------
+# Stage 1 — Validity filter (structural; no statistics)
+# Drop groups that are leaked or unavailable at prediction time under contract.
+# ---------------------------------------------------------------------------
+stage_1_validity_filter:
+  keep_if:
+    - available_at_prediction_time
+    - point_in_time_safe_under_mask_target_after
+  drop_if:
+    - uses_future_target_without_mask_or_recursive_fill
+    - joins_future_unknown_outcome_like_covariates
+  fam_rules:
+    base: known_future_on_test (store_nbr, family, onpromotion)
+    calendar: known_future (DOW, payday, post_eq markers)
+    promo: known_future (onpromotion transforms)
+    lag: past_target_only; multi_step requires mask_target_after or recursive preds
+    rolling: shift_1_then_roll; multi_step same as lag
+    oil: lag_1 public series only; no same-day / bfill
+    holiday: public calendar; honor transferred / locale
+    store_meta: static join
+    transactions: past_only; mask post-origin extras (outcome-like)
+  admitted_after_notebook_01:
+    - base
+    - calendar
+    - promo
+    - lag
+    - rolling
+    - oil
+    - holiday
+    - store_meta
+    - transactions
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Group ablation (default selection path)
+# Progressive core, then optional one-at-a-time extensions of full core.
+# ---------------------------------------------------------------------------
+stage_2_group_ablation:
+  strategy: progressive_core_then_optional
+  core_order: [base, calendar, promo, lag, rolling]
+  optional_extensions: [oil, holiday, store_meta, transactions]
+  comparison: cumulative_mean_rmsle_on_same_outer_folds
+  # Keep adding a group if mean_rmsle decreases vs previous cumulative set.
+  evidence_runs:
+    - {run_id: 010_lgbm_base, feature_groups: [base], mean_rmsle: 0.8850}
+    - {run_id: 011_lgbm_plus_calendar, feature_groups: [base, calendar], mean_rmsle: 0.4368}
+    - {run_id: 012_lgbm_plus_promo, feature_groups: [base, calendar, promo], mean_rmsle: 0.4300}
+    - {run_id: 013_lgbm_plus_lag, feature_groups: [base, calendar, promo, lag], mean_rmsle: 0.4152}
+    - {run_id: 014_lgbm_plus_rolling, feature_groups: [base, calendar, promo, lag, rolling], mean_rmsle: 0.4004}
+  decision_as_of_task_11:
+    locked_for_hpo: [base, calendar, promo, lag, rolling]
+    best_core_run: 014_lgbm_plus_rolling
+    best_core_mean_rmsle: 0.4004
+    optional_groups_status: configs_exist_015_018_not_required_before_hpo
+    notes: >
+      calendar is the largest single gain vs base; promo/lag/rolling each add
+      further mean_rmsle reduction. Optional groups deferred until after nested HPO
+      on the locked core (or as post-HPO one-at-a-time extensions).
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Optional within-group prune
+# Only if a group wins AND column cardinality hurts (latency / collinearity).
+# ---------------------------------------------------------------------------
+stage_3_within_group_prune:
+  enabled: conditional
+  trigger:
+    group_must: help_mean_rmsle
+    and: cardinality_or_collinearity_hurts
+  methods_if_triggered:
+    - drop_near_constant_within_group
+    - prune_highly_collinear_adjacent_lags_windows
+    - prefer_grouped_permutation_not_single_feature_on_lag_blocks
+  default_for_task_11_12: skip
+  rationale: >
+    Core set has 22 features; lag/rolling blocks are intentional. No within-group
+    prune before HPO unless training cost or collinearity diagnostics demand it.
+
+# ---------------------------------------------------------------------------
+# Stage 4 — Stability across outer folds
+# Keep a group if it helps on ≥ 2 / 3 outer folds (paired vs previous cumulative).
+# ---------------------------------------------------------------------------
+stage_4_stability:
+  rule: keep_group_if_helps_on_at_least_2_of_3_outer_folds
+  help_definition: fold_rmsle_with_group < fold_rmsle_without_group
+  evidence_from_core_ablations:
+    calendar_vs_base: {helps_folds: 3, decision: keep}
+    promo_vs_calendar: {helps_folds: 3, decision: keep}
+    lag_vs_promo: {helps_folds: 3, decision: keep}
+    rolling_vs_lag: {helps_folds: 3, decision: keep}
+  selected_groups: [base, calendar, promo, lag, rolling]
+
+# Multi-step leakage controls (must hold for any selected target-derived group)
+multi_step_controls:
+  mask_target_after_origin: required
+  recursive_val_when_lag_or_rolling: required
+  mask_outcome_like_extras_after_origin: [transactions]
+
+handoff:
+  next_task: 12_nested_temporal_hpo
+  tuning_config: configs/tuning/lightgbm.yaml
+  retrain_after_hpo: scripts/train.py with best_params on full outer folds
