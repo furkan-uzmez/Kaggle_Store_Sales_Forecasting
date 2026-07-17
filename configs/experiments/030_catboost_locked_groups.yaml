@@ -1,0 +1,27 @@
+run_id: 030_catboost_locked_groups
+seed: 42
+feature_groups:
+- base
+- calendar
+- promo
+- lag
+- rolling
+model:
+  name: catboost
+  params:
+    # Practical budget: recursive WF on ~3M rows (CPU); ES trims iterations.
+    # String-cat encoding keeps depth-8 training tractable (~3 min/fold fit).
+    n_estimators: 600
+    learning_rate: 0.05
+    depth: 8
+    l2_leaf_reg: 3.0
+    random_strength: 1.0
+    thread_count: 8
+  early_stopping_rounds: 50
+target_transform: log1p
+clip_negative_preds: true
+metrics:
+  primary: rmsle
+  secondary:
+  - mae_log1p
+notes: Locked feature groups matching best LGBM (base+calendar+promo+lag+rolling).

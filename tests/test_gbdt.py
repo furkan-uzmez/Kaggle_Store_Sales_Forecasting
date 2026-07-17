@@ -1,4 +1,4 @@
-"""LightGBM wrapper: CPU path, GPU fallback, seed, early stopping."""
+"""GBDT wrappers: LightGBM, CatBoost, XGBoost — CPU path, GPU fallback, seed."""
 
 from __future__ import annotations
 
@@ -6,7 +6,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from store_sales.models.gbdt import fit_lgbm, inverse_target, transform_target
+from store_sales.models.gbdt import (
+    fit_catboost,
+    fit_lgbm,
+    fit_xgboost,
+    inverse_target,
+    transform_target,
+)
 
 
 def _xy(n: int = 120, seed: int = 0):
@@ -84,3 +90,80 @@ def test_fit_lgbm_respects_seed_for_finite_output():
     p1 = m1.predict(X.iloc[70:])
     p2 = m2.predict(X.iloc[70:])
     assert np.allclose(p1, p2)
+
+
+def test_fit_catboost_cpu_smoke_and_predict():
+    X, y = _xy()
+    X_train, X_val = X.iloc[:90], X.iloc[90:]
+    y_train, y_val = y[:90], y[90:]
+    model = fit_catboost(
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        params={"n_estimators": 40, "learning_rate": 0.1, "depth": 4},
+        seed=42,
+        use_gpu=False,
+        early_stopping_rounds=10,
+        categorical_feature=["cat"],
+    )
+    pred = np.asarray(model.predict(X_val), dtype=float)
+    assert len(pred) == len(X_val)
+    assert np.isfinite(pred).all()
+
+
+def test_fit_catboost_seed_reproducible():
+    X, y = _xy(n=100, seed=2)
+    kwargs = dict(
+        X_train=X.iloc[:70],
+        y_train=y[:70],
+        X_val=X.iloc[70:],
+        y_val=y[70:],
+        params={"n_estimators": 30, "learning_rate": 0.1, "depth": 3},
+        use_gpu=False,
+        early_stopping_rounds=None,
+    )
+    m1 = fit_catboost(**kwargs, seed=11)
+    m2 = fit_catboost(**kwargs, seed=11)
+    assert np.allclose(m1.predict(X.iloc[70:]), m2.predict(X.iloc[70:]))
+
+
+def test_fit_xgboost_cpu_smoke_and_predict():
+    X, y = _xy()
+    X_train, X_val = X.iloc[:90].copy(), X.iloc[90:].copy()
+    # XGBoost native categoricals need category dtype
+    X_train["cat"] = X_train["cat"].astype("category")
+    X_val["cat"] = X_val["cat"].astype("category")
+    y_train, y_val = y[:90], y[90:]
+    model = fit_xgboost(
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        params={"n_estimators": 40, "learning_rate": 0.1, "max_depth": 4},
+        seed=42,
+        use_gpu=False,
+        early_stopping_rounds=10,
+        categorical_feature=["cat"],
+    )
+    pred = np.asarray(model.predict(X_val), dtype=float)
+    assert len(pred) == len(X_val)
+    assert np.isfinite(pred).all()
+
+
+def test_fit_xgboost_seed_reproducible():
+    X, y = _xy(n=100, seed=3)
+    X_tr = X.iloc[:70].copy()
+    X_va = X.iloc[70:].copy()
+    kwargs = dict(
+        X_train=X_tr,
+        y_train=y[:70],
+        X_val=X_va,
+        y_val=y[70:],
+        params={"n_estimators": 30, "learning_rate": 0.1, "max_depth": 3},
+        use_gpu=False,
+        early_stopping_rounds=None,
+    )
+    m1 = fit_xgboost(**kwargs, seed=19)
+    m2 = fit_xgboost(**kwargs, seed=19)
+    assert np.allclose(m1.predict(X_va), m2.predict(X_va))

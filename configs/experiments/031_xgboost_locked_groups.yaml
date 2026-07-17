@@ -1,0 +1,28 @@
+run_id: 031_xgboost_locked_groups
+seed: 42
+feature_groups:
+- base
+- calendar
+- promo
+- lag
+- rolling
+model:
+  name: xgboost
+  params:
+    # Practical budget for ladder + multi-seed; ES trims trees.
+    n_estimators: 400
+    learning_rate: 0.06
+    max_depth: 7
+    min_child_weight: 20
+    subsample: 0.84
+    colsample_bytree: 0.66
+    reg_lambda: 1.0
+    n_jobs: 8
+  early_stopping_rounds: 40
+target_transform: log1p
+clip_negative_preds: true
+metrics:
+  primary: rmsle
+  secondary:
+  - mae_log1p
+notes: Locked feature groups matching best LGBM (base+calendar+promo+lag+rolling).
