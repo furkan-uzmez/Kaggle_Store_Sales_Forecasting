@@ -25,6 +25,12 @@ def add_rolling_features(
 
     Pattern: ``groupby(entity)[target].shift(shift).rolling(window).stat()``.
     Current-row target is never included when ``shift >= 1``.
+
+    Uses only target values present in ``df`` (NaNs propagate through the
+    shifted history). For multi-step features from origin T0, mask sales after
+    T0 before building (see ``mask_target_after``) or fill recursively with
+    predictions — otherwise true post-origin sales leak into rollings on
+    train∪horizon panels.
     """
     entity_cols = list(entity_cols)
     if shift < 1:

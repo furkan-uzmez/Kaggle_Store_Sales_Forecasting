@@ -11,6 +11,7 @@ from store_sales.features.registry import (
     FEATURE_GROUPS,
     build_feature_matrix,
     list_group_ablation_configs,
+    mask_target_after,
 )
 from store_sales.features.rolling import add_rolling_features
 from store_sales.features.transactions import add_transaction_features
@@ -186,3 +187,55 @@ def test_build_feature_matrix_core_groups_pit_safe(tiny_panel: pd.DataFrame):
     # lag_1 != current sales where both present
     m = out["sales_lag_1"].notna()
     assert not (out.loc[m, "sales_lag_1"] == out.loc[m, "sales"]).any()
+
+
+def test_mask_target_after_blocks_multi_step_lag_leakage():
+    """After origin mask, lag_1 on T0+2 must not equal true sales[T0+1].
+
+    Multi-step H>1 from origin T0 on a train∪horizon panel with true post-origin
+    sales would otherwise leak mid-horizon targets into lag/rolling features.
+    """
+    origin = pd.Timestamp("2017-01-03")
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2017-01-01", periods=6, freq="D"),
+            "store_nbr": 1,
+            "family": "A",
+            "sales": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+        }
+    )
+    t0_plus_1 = origin + pd.Timedelta(days=1)
+    t0_plus_2 = origin + pd.Timedelta(days=2)
+    true_sales_t0_plus_1 = df.loc[df["date"] == t0_plus_1, "sales"].iloc[0]
+    assert true_sales_t0_plus_1 == pytest.approx(40.0)
+
+    # Without mask, lag_1 on T0+2 equals true mid-horizon sales (leak).
+    leaked = add_lag_features(
+        df,
+        entity_cols=["store_nbr", "family"],
+        date_col="date",
+        target_col="sales",
+        lags=[1],
+    )
+    leaked_lag = leaked.loc[leaked["date"] == t0_plus_2, "sales_lag_1"].iloc[0]
+    assert leaked_lag == pytest.approx(true_sales_t0_plus_1)
+
+    masked = mask_target_after(df, origin, date_col="date", target_col="sales")
+    # Origin day kept; post-origin sales nulled.
+    assert masked.loc[masked["date"] == origin, "sales"].iloc[0] == pytest.approx(30.0)
+    assert pd.isna(masked.loc[masked["date"] == t0_plus_1, "sales"].iloc[0])
+    assert pd.isna(masked.loc[masked["date"] == t0_plus_2, "sales"].iloc[0])
+
+    safe = add_lag_features(
+        masked,
+        entity_cols=["store_nbr", "family"],
+        date_col="date",
+        target_col="sales",
+        lags=[1],
+    )
+    safe_lag = safe.loc[safe["date"] == t0_plus_2, "sales_lag_1"].iloc[0]
+    # Must not equal true mid-horizon sales (NaN via mask chain is expected).
+    assert not (
+        pd.notna(safe_lag) and safe_lag == pytest.approx(true_sales_t0_plus_1)
+    )
+    assert pd.isna(safe_lag) or safe_lag != true_sales_t0_plus_1

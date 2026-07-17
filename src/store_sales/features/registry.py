@@ -60,6 +60,29 @@ ENTITY_COLS: tuple[str, ...] = ("store_nbr", "family")
 DATE_COL = "date"
 TARGET_COL = "sales"
 
+
+def mask_target_after(
+    df: pd.DataFrame,
+    origin: pd.Timestamp | str,
+    *,
+    date_col: str = DATE_COL,
+    target_col: str = TARGET_COL,
+) -> pd.DataFrame:
+    """Null ``target_col`` for rows with ``date_col`` strictly after ``origin``.
+
+    Returns a copy. Use for multi-step (H>1) feature builds from forecast origin
+    T0: if the panel is train∪val (or train∪horizon) with true post-origin sales,
+    lag/rolling would otherwise see those values. Call this before
+    :func:`build_feature_matrix` (or lag/rolling builders), or use recursive
+    fill of predicted sales after each step instead.
+    """
+    out = df.copy()
+    origin_ts = pd.Timestamp(origin)
+    dates = pd.to_datetime(out[date_col])
+    out.loc[dates > origin_ts, target_col] = float("nan")
+    return out
+
+
 FEATURE_GROUPS: dict[str, list[str]] = {
     "base": list(BASE_FEATURE_NAMES),
     "calendar": list(CALENDAR_FEATURE_NAMES),
@@ -111,11 +134,19 @@ def build_feature_matrix(
 ) -> pd.DataFrame:
     """Build a PIT-safe feature matrix for the requested groups.
 
+    Target-derived groups (lag, rolling) use only sales values present in
+    ``df`` (NaNs propagate through shifts). They do **not** invent a multi-step
+    origin contract: for H>1 forecasts from origin T0 on a panel that still
+    holds true post-origin sales, call :func:`mask_target_after` with that
+    origin first (or recursively fill with model predictions). Building on
+    unmasked train∪val leaks mid-horizon targets into lag_1/rollings.
+
     Parameters
     ----------
     df:
         Panel with at least entity keys and ``date``; ``sales`` required for
-        lag/rolling groups.
+        lag/rolling groups. Available target values only — mask after origin
+        for multi-step PIT when needed.
     groups:
         Subset of ``FEATURE_GROUPS`` keys to materialize.
     extras:

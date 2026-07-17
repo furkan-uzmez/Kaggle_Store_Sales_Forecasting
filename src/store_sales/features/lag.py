@@ -22,6 +22,11 @@ def add_lag_features(
     Rows are sorted by entity then date. Lag ``k`` is the target value from
     ``k`` steps earlier within the same entity; the first ``k`` rows per entity
     are NaN.
+
+    Uses only target values present in ``df`` (NaNs propagate). For multi-step
+    features from origin T0, mask sales after T0 before building (see
+    ``mask_target_after``) or fill recursively with predictions — otherwise
+    true post-origin sales leak into lag features on train∪horizon panels.
     """
     entity_cols = list(entity_cols)
     if not lags:
