@@ -39,8 +39,10 @@
 # - Core groups always ON: `base, calendar, promo, lag, rolling`
 #
 # ## Budget
-# - Default `CFG.n_trials = 100` (joint FS+HPO). Smoke uses 4.
+# - Default `CFG.n_trials = 80` (joint FS+HPO). Smoke uses 4.
 # - SQLite: `optuna_cb_joint.db` (resume with `load_if_exists`)
+# - Optional seed DB (read-only Kaggle dataset), copied into working dir:
+#   `/kaggle/input/datasets/furkanzmez/optuna-cb-joint/optuna_cb_joint.db`
 # - GPU: `CFG.use_gpu=True` probes CatBoost GPU, falls back to CPU
 
 # %% [markdown]
@@ -53,6 +55,7 @@ import gc
 import json
 import os
 import random
+import shutil
 import time
 import warnings
 from dataclasses import dataclass, field
@@ -70,6 +73,13 @@ class CFG:
     competition: str = "store-sales-time-series-forecasting"
     kaggle_input_dir: str = (
         "/kaggle/input/competitions/store-sales-time-series-forecasting"
+    )
+    # Read-only seed study (optional Kaggle Dataset). Copied to WORK_DIR for resume.
+    optuna_seed_db_candidates: list[str] = field(
+        default_factory=lambda: [
+            "/kaggle/input/datasets/furkanzmez/optuna-cb-joint/optuna_cb_joint.db",
+            "/kaggle/input/optuna-cb-joint/optuna_cb_joint.db",
+        ]
     )
     seed: int = 42
     seeds: list[int] = field(default_factory=lambda: [42, 43, 44])
@@ -92,6 +102,8 @@ class CFG:
     study_name: str = "cb_joint_fs_hpo"
     optuna_db_name: str = "optuna_cb_joint.db"
     optuna_load_if_exists: bool = True
+    # If working DB missing/empty and a seed dataset exists, copy it once.
+    optuna_copy_seed_if_missing: bool = True
 
     target_transform: str = "log1p"
     clip_negative: bool = True
@@ -137,12 +149,34 @@ else:
     ON_KAGGLE = False
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
+# Optuna SQLite must be writable → always use WORK_DIR.
+# Optional read-only seed from Kaggle Dataset is copied in if working DB is absent.
 OPTUNA_DB_PATH = WORK_DIR / CFG.optuna_db_name
+OPTUNA_SEED_SRC = next(
+    (Path(p) for p in CFG.optuna_seed_db_candidates if Path(p).is_file()),
+    None,
+)
+if (
+    CFG.optuna_copy_seed_if_missing
+    and OPTUNA_SEED_SRC is not None
+    and not OPTUNA_DB_PATH.exists()
+):
+    shutil.copy2(OPTUNA_SEED_SRC, OPTUNA_DB_PATH)
+    print(f"Copied Optuna seed DB → {OPTUNA_DB_PATH}")
+    print(f"  from {OPTUNA_SEED_SRC} ({OPTUNA_SEED_SRC.stat().st_size} bytes)")
+elif OPTUNA_DB_PATH.exists():
+    print(f"Using existing Optuna DB: {OPTUNA_DB_PATH} ({OPTUNA_DB_PATH.stat().st_size} bytes)")
+elif OPTUNA_SEED_SRC is None:
+    print("No Optuna seed dataset found; study starts empty (new SQLite on first trial).")
+else:
+    print(f"Optuna seed present but copy disabled: {OPTUNA_SEED_SRC}")
+
 OPTUNA_STORAGE = f"sqlite:///{OPTUNA_DB_PATH.resolve()}"
 
 print(f"ON_KAGGLE={ON_KAGGLE}")
 print(f"INPUT_DIR={INPUT_DIR}")
 print(f"WORK_DIR={WORK_DIR}")
+print(f"OPTUNA_SEED_SRC={OPTUNA_SEED_SRC}")
 print(f"OPTUNA_DB={OPTUNA_DB_PATH}")
 print(f"n_trials={CFG.n_trials} seeds={CFG.seeds}")
 
@@ -1050,7 +1084,7 @@ print(json.dumps(card, indent=2)[:1500])
 #
 # | Step | Artifact |
 # | --- | --- |
-# | Joint FS+HPO | `optuna_cb_joint.db`, `trials.csv`, `joint_hpo_summary.json` |
+# | Joint FS+HPO | `optuna_cb_joint.db` (seed from dataset `furkanzmez/optuna-cb-joint` if attached), `trials.csv`, `joint_hpo_summary.json` |
 # | Best groups | core + selected optional flags |
 # | Multi-seed outer | `joint_multiseed_outer.csv` |
 # | Submission | **`submission.csv`** (seed-mean recursive) |
