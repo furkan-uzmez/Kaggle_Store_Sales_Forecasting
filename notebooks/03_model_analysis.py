@@ -25,20 +25,6 @@
 # **Does not:** redefine splits, run new HPO, retune after a one-off LB peek, or build
 # `submission.csv` (Layer 3 / notebook 04).
 #
-# **Skills read (project-local `.agent/skills/`):**
-# - `better-jupyter-notebook` — Markdown before code; O/I/A; no fabricated numbers
-# - `tabular-time-series-error-analysis` — horizon / segment residual slices
-# - `tabular-error-analysis` — residual diagnostics, weak segments
-# - `tabular-time-series-xai` — grouped gain (not per-lag PFI)
-# - `tabular-time-series-evaluation` — RMSLE primary; walk-forward
-# - `tabular-ml-visual-diagnostics` — residual / pred-vs-actual pack
-# - `tabular-time-series-robustness-stress-test` — noise / missing / subset / lag clip
-# - `ml-tabular-robustness-stress-test` — ST-02/03/07 style gates
-# - `ensemble-learning-engineering` — blend accept/reject policy
-# - `model-fit-diagnostics` — fold stability / under/overfit lens
-# - `python-observability` — structured logs via project logger
-# - Supporting: `tabular-time-series-lifecycle` (steps 23–25), `data-storytelling`
-#
 # **No threshold/calibration primary path. No new HPO.**
 
 # %% [markdown]

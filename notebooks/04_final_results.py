@@ -26,17 +26,6 @@
 # **Does not:** redefine splits, open new HPO, retrain for leaderboard peek, or change
 # `configs/final.yaml` feature groups / params.
 #
-# **Skills read (project-local `.agent/skills/`):**
-# - `better-jupyter-notebook` — Markdown before code; O/I/A; no fabricated numbers
-# - `jupytext-notebook-workflows` — optional `ipynb,py:percent` pairing
-# - `kaggle-notebook-competition` — submission sanity; `/kaggle/input` path notes
-# - `tabular-time-series-evaluation` — RMSLE primary; FVA vs seasonal-naive; walk-forward
-# - `tabular-ml-visual-diagnostics` — baseline comparison + submission diagnostics
-# - `tabular-time-series-lifecycle` — freeze / report / no post-lock retune (steps 22–26)
-# - `readme-best-practices` — repro metadata (env, seeds, git, commands)
-# - `data-storytelling` — executive summary first; numbers → decision
-# - Supporting: `ml-reproducibility-seed-control`, `model-fit-diagnostics`
-#
 # **No retune. Artifacts only** (plus optional documented `predict.py` call).
 
 # %% [markdown]

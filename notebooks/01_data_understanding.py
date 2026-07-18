@@ -23,22 +23,6 @@
 # how must it be cleaned and split, and which feature hypotheses are worth testing?
 #
 # **Does not:** fit GBDT, run HPO, learn global imputation/scaling for modeling, or create submissions.
-#
-# **Skills read (project-local `.agent/skills/`):**
-# - `tabular-time-series-lifecycle` — T0/L/H, seasonal-naive before complex models, walk-forward, fold-local transforms
-# - `tabular-time-series-eda` — temporal schema, panel EDA, O/I/A, leakage-aware covariates
-# - `tabular-eda-mentorship` — problem contract, thin notebook + modular helpers, decision log
-# - `tabular-ml-visual-diagnostics` — phase-matched charts with decisions, not decoration
-# - `tabular-time-series-imbalance-handling` — zero-inflation / intermittent demand as signal (not SMOTE)
-# - `tabular-time-series-outlier-handling` — classify before treat; no row deletion; train-only caps if any
-# - `tabular-outlier-handling` — preserve extremes as evidence; fold-local policy
-# - `tabular-time-series-data-leakage-control` — FAM / availability / chronological split first
-# - `better-jupyter-notebook` — Markdown before code; O/I/A; no fabricated numbers
-# - `jupytext-notebook-workflows` — optional `ipynb,py:percent` pairing
-# - `python-observability` — structured logging for load/audit steps
-# - Supporting: `data-storytelling`, `ml-reproducibility-seed-control`
-#
-# **Not applied as primary path:** threshold-tuning, probability-calibration (RMSLE point forecast).
 
 # %% [markdown]
 # ## 0. Problem Contract

@@ -26,20 +26,6 @@
 # **Does not:** retrain GBDT, run long Optuna loops, create submissions, or open a
 # sealed final test beyond the walk-forward manifests already scored.
 #
-# **Skills read (project-local `.agent/skills/`):**
-# - `better-jupyter-notebook` — Markdown before code; O/I/A; no fabricated numbers
-# - `jupytext-notebook-workflows` — optional `ipynb,py:percent` pairing
-# - `tabular-time-series-feature-engineering` — shifted lag/rolling; known-future vs past-only
-# - `tabular-time-series-feature-selection` — chronological selection; stability ≥ folds
-# - `feature-selection-optimization` — selection inside validation protocol; group ablation default
-# - `tabular-time-series-hpo` — nested walk-forward HPO; no random K-fold
-# - `tabular-hpo-optimization` — staged search, sealed holdout discipline
-# - `tabular-ml-baseline` — naive + default GBDT portfolio under frozen contract
-# - `tabular-ml-visual-diagnostics` — phase-matched charts tied to decisions
-# - `ml-tabular-evaluation` — paired fold metrics, artifact lineage
-# - `tabular-time-series-evaluation` — RMSLE primary; FVA vs seasonal-naive; walk-forward
-# - Supporting: `tabular-time-series-lifecycle` (steps 11–19), `data-storytelling`
-#
 # **No long manual HPO loops in cells.** Search space + protocol are defined for Task 12
 # (`configs/tuning/lightgbm.yaml`); this notebook only reviews artifacts.
 
@@ -544,7 +530,7 @@ print("plan_path:", plan_path)
 #
 # **Observation:** Validity admits all notebook-01 groups. Progressive ablation keeps every core step (each helps 3/3 folds). Within-group prune is **skipped** (22 features; lag/rolling collinearity is intentional structure).
 #
-# **Interpretation:** Group-level ablation is the right default for this panel (skill: feature-selection-optimization + TTS FS). Individual lag pruning would need grouped permutation and is deferred unless HPO latency demands it.
+# **Interpretation:** Group-level ablation is the right default for this panel. Individual lag pruning would need grouped permutation and is deferred unless HPO latency demands it.
 #
 # **Action:** Task 12 searches hyperparameters on locked groups only. Optional groups 015–018 remain post-HPO challengers, not search dimensions.
 
